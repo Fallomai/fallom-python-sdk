@@ -12,15 +12,17 @@ os.environ["FALLOM_API_KEY"] = "test-api-key"
 class TestModelsInit:
     """Tests for models.init()"""
 
-    def test_init_requires_api_key(self):
-        """Should raise error when no API key provided."""
+    def test_init_without_api_key_allows_fallback(self):
+        """Should allow init without API key (for fallback-only mode)."""
         with patch.dict(os.environ, {}, clear=True):
             from fallom import models
             models._initialized = False
             models._api_key = None
 
-            with pytest.raises(ValueError, match="No API key provided"):
-                models.init()
+            # Should NOT raise - allows fallback mode
+            models.init()
+            assert models._initialized is True
+            assert models._api_key is None
 
     def test_init_fetches_configs(self):
         """Should fetch configs on init."""
@@ -53,19 +55,29 @@ class TestModelsGet:
         models._base_url = "https://api.test.com"
         models._config_cache = {
             "my-agent": {
-                "key": "my-agent",
-                "version": 1,
-                "variants": [
-                    {"model": "claude-opus", "weight": 80},
-                    {"model": "gpt-4o", "weight": 20}
-                ]
+                "versions": {
+                    1: {
+                        "key": "my-agent",
+                        "version": 1,
+                        "variants": [
+                            {"model": "claude-opus", "weight": 80},
+                            {"model": "gpt-4o", "weight": 20}
+                        ]
+                    }
+                },
+                "latest": 1
             },
             "single-model": {
-                "key": "single-model",
-                "version": 1,
-                "variants": [
-                    {"model": "gpt-4", "weight": 100}
-                ]
+                "versions": {
+                    1: {
+                        "key": "single-model",
+                        "version": 1,
+                        "variants": [
+                            {"model": "gpt-4", "weight": 100}
+                        ]
+                    }
+                },
+                "latest": 1
             }
         }
 
@@ -155,12 +167,17 @@ class TestStickyAssignment:
         models._base_url = "https://api.test.com"
         models._config_cache = {
             "test-agent": {
-                "key": "test-agent",
-                "version": 1,
-                "variants": [
-                    {"model": "model-a", "weight": 50},
-                    {"model": "model-b", "weight": 50}
-                ]
+                "versions": {
+                    1: {
+                        "key": "test-agent",
+                        "version": 1,
+                        "variants": [
+                            {"model": "model-a", "weight": 50},
+                            {"model": "model-b", "weight": 50}
+                        ]
+                    }
+                },
+                "latest": 1
             }
         }
 
@@ -216,7 +233,7 @@ class TestRecordSession:
                     "session_id": "session-123",
                     "assigned_model": "gpt-4"
                 },
-                timeout=5
+                timeout=models._RECORD_TIMEOUT
             )
 
     def test_record_session_fails_silently(self):

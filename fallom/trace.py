@@ -25,16 +25,33 @@ _session_context = contextvars.ContextVar("fallom_session", default=None)
 
 class FallomSpanProcessor(SpanProcessor):
     """
-    Custom SpanProcessor that injects fallom session context into every span.
-    This ensures all auto-instrumented LLM calls get our config_key and session_id.
+    Custom SpanProcessor that injects fallom context into every span.
+    This ensures all auto-instrumented LLM calls get our config_key, session_id,
+    and prompt context (if prompts.get() or prompts.get_ab() was called).
     """
     
     def on_start(self, span: ReadableSpan, parent_context=None):
         """Called when a span starts - inject our context as attributes."""
+        # Inject session context
         ctx = _session_context.get()
         if ctx:
             span.set_attribute("fallom.config_key", ctx.get("config_key", ""))
             span.set_attribute("fallom.session_id", ctx.get("session_id", ""))
+        
+        # Inject prompt context (one-shot - clears after use)
+        try:
+            from fallom import prompts
+            prompt_ctx = prompts.get_prompt_context()
+            if prompt_ctx:
+                span.set_attribute("fallom.prompt_key", prompt_ctx.get("prompt_key", ""))
+                span.set_attribute("fallom.prompt_version", prompt_ctx.get("prompt_version", 0))
+                if prompt_ctx.get("ab_test_key"):
+                    span.set_attribute("fallom.prompt_ab_test", prompt_ctx.get("ab_test_key", ""))
+                    span.set_attribute("fallom.prompt_variant", prompt_ctx.get("variant_index", 0))
+                # Clear after injection (one-shot)
+                prompts.clear_prompt_context()
+        except ImportError:
+            pass  # prompts module not available
     
     def on_end(self, span: ReadableSpan):
         """Called when a span ends."""
