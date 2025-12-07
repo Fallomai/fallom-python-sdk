@@ -37,6 +37,8 @@ class FallomSpanProcessor(SpanProcessor):
         if ctx:
             span.set_attribute("fallom.config_key", ctx.get("config_key", ""))
             span.set_attribute("fallom.session_id", ctx.get("session_id", ""))
+            if ctx.get("customer_id"):
+                span.set_attribute("fallom.customer_id", ctx["customer_id"])
         
         # Inject prompt context (one-shot - clears after use)
         try:
@@ -170,22 +172,25 @@ def _auto_instrument():
             pass  # Instrumentation failed, skip silently
 
 
-def set_session(config_key: str, session_id: str):
+def set_session(config_key: str, session_id: str, customer_id: str = None):
     """
     Set the current session context.
 
     All subsequent LLM calls in this thread/async context will be
-    automatically tagged with this config_key and session_id.
+    automatically tagged with this config_key, session_id, and customer_id.
 
     Args:
         config_key: Your config name (e.g., "linkedin-agent")
         session_id: Your session/conversation ID
+        customer_id: Optional customer/user identifier for analytics
 
     Example:
-        trace.set_session("linkedin-agent", session_id)
-        agent.run(message)  # Automatically traced with session
+        trace.set_session("linkedin-agent", session_id, customer_id="user_123")
+        agent.run(message)  # Automatically traced with session + customer
     """
     ctx = {"config_key": config_key, "session_id": session_id}
+    if customer_id:
+        ctx["customer_id"] = customer_id
     _session_context.set(ctx)
     # FallomSpanProcessor will inject these into all spans automatically
 
