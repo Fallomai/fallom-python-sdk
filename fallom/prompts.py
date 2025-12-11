@@ -60,7 +60,7 @@ def init(api_key: str = None, base_url: str = None):
     global _api_key, _base_url, _initialized, _sync_thread
 
     _api_key = api_key or os.environ.get("FALLOM_API_KEY")
-    _base_url = base_url or os.environ.get("FALLOM_BASE_URL", "https://spans.fallom.com")
+    _base_url = base_url or os.environ.get("FALLOM_PROMPTS_URL", os.environ.get("FALLOM_BASE_URL", "https://prompts.fallom.com"))
     _initialized = True
 
     if not _api_key:

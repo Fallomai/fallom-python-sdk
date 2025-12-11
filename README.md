@@ -244,7 +244,9 @@ fallom.trace.set_session("my-agent", session_id)
 
 ```bash
 FALLOM_API_KEY=your-api-key
-FALLOM_BASE_URL=https://spans.fallom.com  # or http://localhost:8001 for local dev
+FALLOM_TRACES_URL=https://traces.fallom.com
+FALLOM_CONFIGS_URL=https://configs.fallom.com
+FALLOM_PROMPTS_URL=https://prompts.fallom.com
 ```
 
 ### Initialization Options
@@ -252,7 +254,10 @@ FALLOM_BASE_URL=https://spans.fallom.com  # or http://localhost:8001 for local d
 ```python
 fallom.init(
     api_key="your-api-key",      # Or use FALLOM_API_KEY env var
-    base_url="https://spans.fallom.com",  # Or use FALLOM_BASE_URL env var
+    # URLs default to production, override for local dev:
+    # traces_url="http://localhost:3002",
+    # configs_url="http://localhost:3003",
+    # prompts_url="http://localhost:3004",
     capture_content=True         # Set False for privacy mode
 )
 ```

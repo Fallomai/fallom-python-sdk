@@ -94,7 +94,7 @@ def init(api_key: str = None, base_url: str = None, capture_content: bool = True
     global _api_key, _base_url, _initialized, _capture_content
 
     _api_key = api_key or os.environ.get("FALLOM_API_KEY")
-    _base_url = base_url or os.environ.get("FALLOM_BASE_URL", "https://spans.fallom.com")
+    _base_url = base_url or os.environ.get("FALLOM_TRACES_URL", os.environ.get("FALLOM_BASE_URL", "https://traces.fallom.com"))
     
     # Check env var for capture_content (explicit param takes precedence)
     env_capture = os.environ.get("FALLOM_CAPTURE_CONTENT", "").lower()
@@ -135,6 +135,7 @@ def _auto_instrument():
     Respects _capture_content setting for privacy.
     """
     instrumentors = [
+        # LLM SDKs
         ("opentelemetry.instrumentation.openai", "OpenAIInstrumentor"),
         ("opentelemetry.instrumentation.anthropic", "AnthropicInstrumentor"),
         ("opentelemetry.instrumentation.cohere", "CohereInstrumentor"),
@@ -144,6 +145,9 @@ def _auto_instrument():
         ("opentelemetry.instrumentation.langchain", "LangchainInstrumentor"),
         ("opentelemetry.instrumentation.replicate", "ReplicateInstrumentor"),
         ("opentelemetry.instrumentation.vertexai", "VertexAIInstrumentor"),
+        # HTTP clients (for libraries like agno that use requests/httpx internally)
+        ("opentelemetry.instrumentation.requests", "RequestsInstrumentor"),
+        ("opentelemetry.instrumentation.httpx", "HTTPXClientInstrumentor"),
     ]
 
     for module_name, class_name in instrumentors:
