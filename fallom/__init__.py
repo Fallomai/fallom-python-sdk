@@ -1,9 +1,9 @@
 """
-Fallom - Model A/B testing, prompt management, and tracing for LLM applications.
+Fallom - Model A/B testing, prompt management, tracing, and evals for LLM applications.
 
 Usage:
     import fallom
-    from fallom import trace, models, prompts
+    from fallom import trace, models, prompts, evals
 
     fallom.init()
 
@@ -27,11 +27,20 @@ Usage:
 
     # Later, add custom metrics
     trace.span({"outlier_score": 0.8})
+
+    # Run evaluations
+    evals.init()
+    dataset = [
+        evals.DatasetItem(input="...", output="...", system_message="...")
+    ]
+    results = evals.evaluate(dataset, metrics=["answer_relevancy", "faithfulness"])
+    evals.upload_results(results, name="My Eval Run")
 """
 
 from fallom import trace
 from fallom import models
 from fallom import prompts
+from fallom import evals
 
 __version__ = "0.1.0"
 
