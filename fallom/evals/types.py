@@ -1,0 +1,128 @@
+"""Type definitions for Fallom Evals."""
+
+from dataclasses import dataclass, field
+from typing import Optional, List, Dict, Any, Literal, Callable, Union
+
+
+# Built-in metric names
+MetricName = Literal[
+    "answer_relevancy",
+    "hallucination",
+    "toxicity",
+    "faithfulness",
+    "completeness"
+]
+
+# Model response type from custom functions
+ModelResponse = Dict[str, Any]  # { "content": str, "tokens_in"?: int, "tokens_out"?: int, "cost"?: float }
+
+# Model callable type: takes messages list, returns response dict
+ModelCallable = Callable[[List[Dict[str, str]]], ModelResponse]
+
+# List of all available built-in metrics
+AVAILABLE_METRICS: List[MetricName] = [
+    "answer_relevancy",
+    "hallucination",
+    "toxicity",
+    "faithfulness",
+    "completeness"
+]
+
+
+@dataclass
+class CustomMetric:
+    """
+    Define a custom evaluation metric using G-Eval.
+
+    Args:
+        name: Unique identifier for the metric (e.g., "brand_alignment")
+        criteria: Description of what the metric evaluates
+        steps: List of evaluation steps for the LLM judge to follow
+
+    Example:
+        brand_metric = CustomMetric(
+            name="brand_alignment",
+            criteria="Brand Alignment - Does the response follow brand voice guidelines?",
+            steps=[
+                "Check if the tone is professional yet friendly",
+                "Verify no competitor brands are mentioned",
+                "Ensure the response uses approved terminology",
+            ]
+        )
+
+        results = evals.evaluate(
+            dataset=dataset,
+            metrics=["answer_relevancy", brand_metric]
+        )
+    """
+    name: str
+    criteria: str
+    steps: List[str]
+
+
+# Metric can be a built-in name or a custom metric
+MetricInput = Union[MetricName, CustomMetric]
+
+# Dataset can be a list of items OR a string (dataset key to fetch from Fallom)
+DatasetInput = Union[List["DatasetItem"], str]
+
+
+@dataclass
+class DatasetItem:
+    """A single item in an evaluation dataset."""
+    input: str
+    output: str
+    system_message: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+
+@dataclass
+class Model:
+    """
+    A model configuration for use in compare_models().
+
+    Can represent either an OpenRouter model or a custom model (fine-tuned, self-hosted, etc.)
+
+    Examples:
+        # OpenRouter model (simple string also works)
+        model = Model(name="openai/gpt-4o")
+
+        # Custom fine-tuned OpenAI model
+        model = evals.create_openai_model("ft:gpt-4o-2024-08-06:my-org::abc123", name="my-fine-tuned")
+
+        # Self-hosted model
+        model = evals.create_custom_model(
+            name="my-llama",
+            endpoint="http://localhost:8000/v1/chat/completions",
+            api_key="my-key"
+        )
+    """
+    name: str
+    call_fn: Optional[ModelCallable] = None  # If None, uses OpenRouter with name as model slug
+
+
+@dataclass
+class EvalResult:
+    """Evaluation result for a single item."""
+    input: str
+    output: str
+    system_message: Optional[str]
+    model: str
+    is_production: bool
+
+    # Scores (0-1 scale)
+    answer_relevancy: Optional[float] = None
+    hallucination: Optional[float] = None
+    toxicity: Optional[float] = None
+    faithfulness: Optional[float] = None
+    completeness: Optional[float] = None
+
+    # Reasoning from judge
+    reasoning: Dict[str, str] = field(default_factory=dict)
+
+    # Generation metadata (for non-production)
+    latency_ms: Optional[int] = None
+    tokens_in: Optional[int] = None
+    tokens_out: Optional[int] = None
+    cost: Optional[float] = None
+
