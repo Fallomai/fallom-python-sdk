@@ -6,31 +6,59 @@ Model A/B testing, prompt management, and tracing for LLM applications. Zero lat
 
 ```bash
 pip install fallom
-
-# With auto-instrumentation for your LLM provider:
-pip install fallom opentelemetry-instrumentation-openai
-pip install fallom opentelemetry-instrumentation-anthropic
 ```
 
 ## Quick Start
 
 ```python
-# ⚠️ IMPORTANT: Import and initialize Fallom BEFORE importing OpenAI!
 import fallom
+from openai import OpenAI
+
+# Initialize Fallom once at app startup
 fallom.init(api_key="your-api-key")
 
-# NOW import OpenAI (after instrumentation is set up)
-from openai import OpenAI
-client = OpenAI()
+# Create a session for this conversation/request
+session = fallom.session(
+    config_key="my-app",
+    session_id="session-123",
+    customer_id="user-456",  # optional
+)
 
-# Set default session context for tracing
-fallom.trace.set_session("my-agent", session_id)
+# Wrap your LLM client
+openai = session.wrap_openai(OpenAI())
 
 # All LLM calls are now automatically traced!
-response = client.chat.completions.create(model="gpt-4o", messages=[...])
+response = openai.chat.completions.create(
+    model="gpt-4o",
+    messages=[{"role": "user", "content": "Hello!"}]
+)
 ```
 
-> ⚠️ **Import Order Matters!** Auto-instrumentation hooks into libraries when they're imported. You must call `fallom.init()` BEFORE importing `openai`, `anthropic`, etc.
+## Supported Providers
+
+Wrap any of these LLM clients:
+
+```python
+# OpenAI
+openai = session.wrap_openai(OpenAI())
+
+# Anthropic
+anthropic = session.wrap_anthropic(Anthropic())
+
+# Google AI
+import google.generativeai as genai
+genai.configure(api_key="...")
+model = genai.GenerativeModel("gemini-1.5-flash")
+gemini = session.wrap_google_ai(model)
+
+# OpenRouter (uses OpenAI SDK)
+openrouter = session.wrap_openai(
+    OpenAI(
+        base_url="https://openrouter.ai/api/v1",
+        api_key="your-openrouter-key",
+    )
+)
+```
 
 ## Model A/B Testing
 
@@ -42,14 +70,21 @@ from fallom import models
 # Get assigned model for this session
 model = models.get("summarizer-config", session_id)
 # Returns: "gpt-4o" or "claude-3-5-sonnet" based on your config weights
+```
 
-agent = Agent(model=model)
-agent.run(message)
+Or use the session's `get_model()` method:
+
+```python
+session = fallom.session(
+    config_key="summarizer-config",
+    session_id=session_id,
+)
+
+# Get model for this session's config
+model = await session.get_model(fallback="gpt-4o-mini")
 ```
 
 ### Version Pinning
-
-Pin to a specific config version, or use latest (default):
 
 ```python
 # Use latest version (default)
@@ -68,6 +103,23 @@ model = models.get(
     "my-config", 
     session_id, 
     fallback="gpt-4o-mini"  # Used if config not found or Fallom unreachable
+)
+```
+
+### User Targeting
+
+Override weighted distribution for specific users or segments:
+
+```python
+model = models.get(
+    "my-config",
+    session_id,
+    fallback="gpt-4o-mini",
+    customer_id="user-123",  # For individual targeting
+    context={                 # For rule-based targeting
+        "plan": "enterprise",
+        "region": "us-west"
+    }
 )
 ```
 
@@ -93,7 +145,7 @@ prompt = prompts.get("onboarding", variables={
 })
 
 # Use the prompt with any LLM
-response = client.chat.completions.create(
+response = openai.chat.completions.create(
     model="gpt-4o",
     messages=[
         {"role": "system", "content": prompt.system},
@@ -124,26 +176,16 @@ prompt = prompts.get_ab("onboarding-test", session_id, variables={
 # for analytics in your dashboard
 ```
 
-### Version Pinning
-
-```python
-# Use latest version (default)
-prompt = prompts.get("my-prompt")
-
-# Pin to specific version
-prompt = prompts.get("my-prompt", version=2)
-```
-
 ### Automatic Trace Tagging
 
-When you call `prompts.get()` or `prompts.get_ab()`, the next LLM call is automatically tagged with the prompt information. This allows you to see which prompts are used in your traces without any extra code.
+When you call `prompts.get()` or `prompts.get_ab()`, the next LLM call is automatically tagged with the prompt information:
 
 ```python
 # Get prompt - sets up auto-tagging for next LLM call
 prompt = prompts.get("onboarding", variables={"user_name": "John"})
 
 # This call is automatically tagged with prompt_key, prompt_version, etc.
-response = client.chat.completions.create(
+response = openai.chat.completions.create(
     model="gpt-4o",
     messages=[
         {"role": "system", "content": prompt.system},
@@ -152,54 +194,62 @@ response = client.chat.completions.create(
 )
 ```
 
-## Tracing
+## Session Context
 
-Auto-capture all LLM calls with OpenTelemetry instrumentation.
-
-> ⚠️ **Important:** Auto-tracing only works with supported LLM SDKs (OpenAI, Anthropic, etc.) - not raw HTTP requests. If you're using an OpenAI-compatible API like OpenRouter, LiteLLM, or a self-hosted model, use the OpenAI SDK with a custom `base_url`:
->
-> ```python
-> from openai import OpenAI
-> 
-> # OpenRouter, LiteLLM, vLLM, etc.
-> client = OpenAI(
->     base_url="https://openrouter.ai/api/v1",  # or your provider's URL
->     api_key="your-provider-key"
-> )
-> 
-> # Now this call will be auto-traced!
-> response = client.chat.completions.create(model="gpt-4o", messages=[...])
-> ```
-
-### Automatic Tracing
+Sessions group related LLM calls together (e.g., a conversation or agent run):
 
 ```python
-# Step 1: Import and init Fallom FIRST
-import fallom
-fallom.init()
-
-# Step 2: Import OpenAI AFTER init
-from openai import OpenAI
-client = OpenAI()
-
-# Set session context
-fallom.trace.set_session("my-agent", session_id)
-
-# Step 3: All LLM calls automatically traced with:
-# - Model, tokens, latency
-# - Prompts and completions
-# - Your config_key and session_id
-response = client.chat.completions.create(model="gpt-4o", messages=[...])
+session = fallom.session(
+    config_key="my-agent",       # Groups traces in dashboard
+    session_id="session-123",    # Conversation/request ID
+    customer_id="user-456",      # Optional: end-user identifier
+    metadata={                   # Optional: custom key-value metadata
+        "deployment": "dedicated",
+        "request_type": "transcript",
+    },
+    tags=["production", "high-priority"],  # Optional: simple string tags
+)
 ```
 
-### Custom Metrics
+### Concurrent Sessions
 
-Record business metrics that OTEL can't capture automatically:
+Sessions are isolated - safe for concurrent requests:
+
+```python
+import concurrent.futures
+
+def handle_request(user_id: str, conversation_id: str):
+    session = fallom.session(
+        config_key="my-agent",
+        session_id=conversation_id,
+        customer_id=user_id,
+    )
+
+    openai = session.wrap_openai(OpenAI())
+
+    # This session's context is isolated
+    return openai.chat.completions.create(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "Hello!"}]
+    )
+
+# Safe to run concurrently!
+with concurrent.futures.ThreadPoolExecutor() as executor:
+    futures = [
+        executor.submit(handle_request, "user-1", "conv-1"),
+        executor.submit(handle_request, "user-2", "conv-2"),
+    ]
+```
+
+## Custom Metrics
+
+Record business metrics that can't be captured automatically:
 
 ```python
 from fallom import trace
 
-# Record custom metrics for this session
+# Record custom metrics (requires session context via set_session)
+trace.set_session("my-agent", session_id)
 trace.span({
     "outlier_score": 0.8,
     "user_satisfaction": 4,
@@ -214,30 +264,6 @@ trace.span(
 )
 ```
 
-## Multiple A/B Tests in One Workflow
-
-If you have multiple LLM calls and only want to A/B test some of them:
-
-```python
-import fallom
-
-fallom.init(api_key="your-api-key")
-
-# Set default context for all tracing
-fallom.trace.set_session("my-agent", session_id)
-
-# ... regular LLM calls (traced as "my-agent") ...
-
-# A/B test a specific call - models.get() auto-updates context
-model = models.get("summarizer-test", session_id, fallback="gpt-4o")
-result = summarizer.run(model=model)
-
-# Reset context back to default
-fallom.trace.set_session("my-agent", session_id)
-
-# ... more regular LLM calls (traced as "my-agent") ...
-```
-
 ## Configuration
 
 ### Environment Variables
@@ -247,18 +273,19 @@ FALLOM_API_KEY=your-api-key
 FALLOM_TRACES_URL=https://traces.fallom.com
 FALLOM_CONFIGS_URL=https://configs.fallom.com
 FALLOM_PROMPTS_URL=https://prompts.fallom.com
+FALLOM_CAPTURE_CONTENT=true  # Set to false for privacy mode
 ```
 
 ### Initialization Options
 
 ```python
 fallom.init(
-    api_key="your-api-key",      # Or use FALLOM_API_KEY env var
-    # URLs default to production, override for local dev:
-    # traces_url="http://localhost:3002",
-    # configs_url="http://localhost:3003",
-    # prompts_url="http://localhost:3004",
-    capture_content=True         # Set False for privacy mode
+    api_key="your-api-key",       # Or use FALLOM_API_KEY env var
+    traces_url="...",             # Override traces endpoint
+    configs_url="...",            # Override configs endpoint
+    prompts_url="...",            # Override prompts endpoint
+    capture_content=True,         # Set False for privacy mode
+    debug=False,                  # Enable debug logging
 )
 ```
 
@@ -285,60 +312,65 @@ In privacy mode, Fallom still tracks:
 
 ## API Reference
 
-### `fallom.init(api_key?, base_url?, capture_content?)`
-Initialize the SDK. Call this before importing LLM libraries for auto-instrumentation.
+### `fallom.init(api_key?, traces_url?, configs_url?, prompts_url?, capture_content?, debug?)`
+Initialize the SDK. Call this once at app startup.
 
-- `capture_content`: Whether to capture prompt/completion text (default: `True`)
-
-### `fallom.models.get(config_key, session_id, version?, fallback?) -> str`
-Get model assignment for a session.
+### `fallom.session(config_key, session_id, customer_id?, metadata?, tags?) -> FallomSession`
+Create a session for tracing.
 - `config_key`: Your config name from the dashboard
-- `session_id`: Unique session/conversation ID (sticky assignment)
-- `version`: Pin to specific version (default: latest)
-- `fallback`: Model to return if anything fails
+- `session_id`: Unique session/conversation ID
+- `customer_id`: Optional user identifier
+- `metadata`: Optional dict of custom metadata
+- `tags`: Optional list of string tags
+
+### `FallomSession.wrap_openai(client) -> client`
+Wrap an OpenAI client for automatic tracing.
+
+### `FallomSession.wrap_anthropic(client) -> client`
+Wrap an Anthropic client for automatic tracing.
+
+### `FallomSession.wrap_google_ai(model) -> model`
+Wrap a Google AI GenerativeModel for automatic tracing.
+
+### `FallomSession.get_model(config_key?, fallback?, version?) -> str`
+Get model assignment for this session.
+
+### `fallom.models.get(config_key, session_id, version?, fallback?, customer_id?, context?) -> str`
+Get model assignment for a session.
 
 ### `fallom.prompts.get(prompt_key, variables?, version?) -> PromptResult`
 Get a managed prompt.
-- `prompt_key`: Your prompt key from the dashboard
-- `variables`: Dict of template variables (e.g., `{"user_name": "John"}`)
-- `version`: Pin to specific version (default: latest)
-- Returns: `PromptResult` with `key`, `version`, `system`, `user`
 
 ### `fallom.prompts.get_ab(ab_test_key, session_id, variables?) -> PromptResult`
 Get a prompt from an A/B test (sticky assignment).
-- `ab_test_key`: Your A/B test key from the dashboard
-- `session_id`: Unique session/conversation ID (for sticky assignment)
-- `variables`: Dict of template variables
-- Returns: `PromptResult` with `key`, `version`, `system`, `user`, `ab_test_key`, `variant_index`
 
-### `fallom.trace.set_session(config_key, session_id)`
-Set trace context. All subsequent LLM calls will be tagged with this config_key and session_id.
-
-### `fallom.trace.clear_session()`
-Clear trace context.
+### `fallom.trace.set_session(config_key, session_id, customer_id?, metadata?, tags?)`
+Set trace context (legacy API for backwards compatibility).
 
 ### `fallom.trace.span(data, config_key?, session_id?)`
 Record custom business metrics.
-- `data`: Dict of metrics to record
-- `config_key`: Optional if `set_session()` was called
-- `session_id`: Optional if `set_session()` was called
 
-## Supported LLM Providers
+## Legacy API
 
-Auto-instrumentation available for:
-- OpenAI (+ OpenAI-compatible APIs: OpenRouter, LiteLLM, vLLM, Ollama, etc.)
-- Anthropic
-- Cohere
-- AWS Bedrock
-- Google Generative AI
-- Mistral AI
-- LangChain
-- Replicate
-- Vertex AI
+For backwards compatibility, you can still use the global `set_session()` API with auto-instrumentation:
 
-Install the corresponding `opentelemetry-instrumentation-*` package for your provider.
+```python
+import fallom
+fallom.init()
 
-**Note:** You must use the official SDK for your provider. Raw HTTP requests (e.g., `requests.post()`) will not be traced. For OpenAI-compatible APIs, use the OpenAI SDK with a custom `base_url`.
+from openai import OpenAI
+client = OpenAI()
+
+fallom.trace.set_session("my-agent", session_id)
+
+# Calls are traced if opentelemetry instrumentation is installed
+response = client.chat.completions.create(...)
+```
+
+However, we recommend using the new session-based API for:
+- Better isolation in concurrent environments
+- Explicit wrapping (no import order dependencies)
+- Clearer code structure
 
 ## Testing
 
@@ -349,28 +381,6 @@ cd sdk/python-sdk
 pip install pytest
 pytest tests/ -v
 ```
-
-## Deploying
-
-To publish a new version to PyPI:
-
-```bash
-cd sdk/python-sdk
-
-# Update version in pyproject.toml
-# Then:
-pip install build twine
-python -m build
-twine upload dist/*
-```
-
-## Examples
-
-See the `examples/` folder for complete examples:
-- `basic_usage.py` - Simple A/B testing
-- `tracing_only.py` - Just tracing, no A/B testing
-- `models_only.py` - Just A/B testing, no tracing
-- `batch_job.py` - Recording metrics in batch jobs
 
 ## License
 

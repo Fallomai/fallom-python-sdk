@@ -15,18 +15,57 @@ import hashlib
 import threading
 import time
 import requests
-from typing import Dict, Optional
+from typing import Dict, Optional, List, Any, Union
+from dataclasses import dataclass
 
-_api_key: str = None
-_base_url: str = None
-_config_cache: Dict[str, dict] = {}  # key -> {version -> config}
+_api_key: Optional[str] = None
+_base_url: str = "https://configs.fallom.com"
+_config_cache: Dict[str, dict] = {}  # key -> {versions: {v: config}, latest: int}
 _initialized: bool = False
-_sync_thread: threading.Thread = None
+_sync_thread: Optional[threading.Thread] = None
+_debug_mode: bool = False
 
 # Short timeouts - we'd rather return fallback than add latency
 _INIT_TIMEOUT = 2  # seconds - initial fetch
 _SYNC_TIMEOUT = 2  # seconds - background sync
 _RECORD_TIMEOUT = 1  # seconds - recording sessions
+
+
+@dataclass
+class IndividualTarget:
+    """Individual target - assigns specific users to specific variants."""
+    field: str
+    value: str
+    variant_index: int
+
+
+@dataclass
+class TargetingCondition:
+    """Condition for rule-based targeting."""
+    field: str
+    operator: str  # "eq", "neq", "in", "nin", "contains", "startsWith", "endsWith"
+    value: Union[str, List[str]]
+
+
+@dataclass
+class TargetingRule:
+    """Rule-based targeting with conditions."""
+    conditions: List[TargetingCondition]
+    variant_index: int
+
+
+@dataclass
+class Targeting:
+    """Targeting configuration for user-level model assignment."""
+    individual_targets: Optional[List[IndividualTarget]] = None
+    rules: Optional[List[TargetingRule]] = None
+    enabled: bool = True
+
+
+def _log(msg: str):
+    """Print debug message if debug mode is enabled."""
+    if _debug_mode:
+        print(f"[Fallom] {msg}")
 
 
 def init(api_key: str = None, base_url: str = None):
@@ -38,7 +77,7 @@ def init(api_key: str = None, base_url: str = None):
 
     Args:
         api_key: Your Fallom API key. Defaults to FALLOM_API_KEY env var.
-        base_url: API base URL. Defaults to FALLOM_BASE_URL env var, or https://spans.fallom.com
+        base_url: API base URL. Defaults to https://configs.fallom.com
 
     Example:
         from fallom import models
@@ -47,14 +86,14 @@ def init(api_key: str = None, base_url: str = None):
     global _api_key, _base_url, _initialized, _sync_thread
 
     _api_key = api_key or os.environ.get("FALLOM_API_KEY")
-    _base_url = base_url or os.environ.get("FALLOM_CONFIGS_URL", os.environ.get("FALLOM_BASE_URL", "https://configs.fallom.com"))
+    _base_url = base_url or os.environ.get("FALLOM_CONFIGS_URL",
+                                            os.environ.get("FALLOM_BASE_URL", "https://configs.fallom.com"))
     _initialized = True
-    
+
     if not _api_key:
         return  # No API key - get() will return fallback
 
     # Start background fetch immediately (non-blocking)
-    # This way if there's any work before the first get() call, configs might be ready
     threading.Thread(target=_fetch_configs, daemon=True).start()
 
     # Start background sync thread for periodic refresh
@@ -70,14 +109,6 @@ def _ensure_init():
             init()
         except Exception:
             pass
-
-
-_debug_mode = False
-
-def _log(msg: str):
-    """Print debug message if debug mode is enabled."""
-    if _debug_mode:
-        print(f"[Fallom] {msg}")
 
 
 def _fetch_configs(timeout: float = _SYNC_TIMEOUT):
@@ -106,7 +137,7 @@ def _fetch_configs(timeout: float = _SYNC_TIMEOUT):
                 if key not in _config_cache:
                     _config_cache[key] = {"versions": {}, "latest": None}
                 _config_cache[key]["versions"][version] = c
-                # Track latest version (the one returned by /configs is always the current/latest)
+                # Track latest version
                 _config_cache[key]["latest"] = version
         else:
             _log(f"Fetch failed: {resp.text}")
@@ -147,11 +178,90 @@ def _sync_loop():
             pass
 
 
+def _evaluate_targeting(
+    targeting: Optional[Dict[str, Any]],
+    customer_id: Optional[str],
+    context: Optional[Dict[str, str]]
+) -> Optional[int]:
+    """
+    Evaluate targeting rules to find a matching variant.
+    Returns the variant index if matched, or None if no match.
+    """
+    if not targeting or targeting.get("enabled") is False:
+        return None
+
+    # Build the evaluation context from customer_id and context
+    eval_context: Dict[str, str] = {}
+    if context:
+        eval_context.update(context)
+    if customer_id:
+        eval_context["customerId"] = customer_id
+
+    _log(f"Evaluating targeting with context: {eval_context}")
+
+    # 1. Check individual targets first (exact match)
+    individual_targets = targeting.get("individualTargets", [])
+    for target in individual_targets:
+        field = target.get("field")
+        value = target.get("value")
+        variant_index = target.get("variantIndex")
+        field_value = eval_context.get(field)
+        if field_value == value:
+            _log(f"Individual target matched: {field}={value} -> variant {variant_index}")
+            return variant_index
+
+    # 2. Check rule-based targeting
+    rules = targeting.get("rules", [])
+    for rule in rules:
+        conditions = rule.get("conditions", [])
+        all_match = True
+
+        for condition in conditions:
+            field = condition.get("field")
+            operator = condition.get("operator")
+            value = condition.get("value")
+            field_value = eval_context.get(field)
+
+            if field_value is None:
+                all_match = False
+                break
+
+            match = False
+            if operator == "eq":
+                match = field_value == value
+            elif operator == "neq":
+                match = field_value != value
+            elif operator == "in":
+                match = isinstance(value, list) and field_value in value
+            elif operator == "nin":
+                match = isinstance(value, list) and field_value not in value
+            elif operator == "contains":
+                match = isinstance(value, str) and value in field_value
+            elif operator == "startsWith":
+                match = isinstance(value, str) and field_value.startswith(value)
+            elif operator == "endsWith":
+                match = isinstance(value, str) and field_value.endswith(value)
+
+            if not match:
+                all_match = False
+                break
+
+        if all_match:
+            variant_index = rule.get("variantIndex")
+            _log(f"Rule matched: {conditions} -> variant {variant_index}")
+            return variant_index
+
+    _log("No targeting rules matched, falling back to weighted random")
+    return None
+
+
 def get(
-    config_key: str, 
-    session_id: str, 
+    config_key: str,
+    session_id: str,
     version: Optional[int] = None,
     fallback: Optional[str] = None,
+    customer_id: Optional[str] = None,
+    context: Optional[Dict[str, str]] = None,
     debug: bool = False
 ) -> str:
     """
@@ -162,15 +272,15 @@ def get(
 
     Same session_id always returns same model (sticky assignment).
 
-    Also automatically sets trace context, so all subsequent LLM calls
-    are tagged with this session.
-
     Args:
         config_key: Your config name (e.g., "linkedin-agent")
         session_id: Your session/conversation ID (must be consistent)
         version: Pin to specific version (1, 2, etc). None = latest (default)
         fallback: Model to return if config not found or Fallom is down.
                   If not provided and config fails, raises ValueError.
+        customer_id: User ID for individual targeting (e.g., "user-123")
+        context: Additional context for rule-based targeting (e.g., {"plan": "enterprise"})
+        debug: Enable debug logging
 
     Returns:
         Model string (e.g., "claude-opus", "gpt-4o")
@@ -187,25 +297,32 @@ def get(
 
         # With fallback for resilience
         model = models.get("linkedin-agent", session_id, fallback="gpt-4o-mini")
+
+        # With targeting
+        model = models.get(
+            "linkedin-agent",
+            session_id,
+            customer_id="user-123",
+            context={"plan": "enterprise"}
+        )
     """
     global _debug_mode
     _debug_mode = debug
-    
+
     _ensure_init()
     _log(f"get() called: config_key={config_key}, session_id={session_id}, fallback={fallback}")
 
-    # Try to get config
     try:
         config_data = _config_cache.get(config_key)
         _log(f"Cache lookup for '{config_key}': {'found' if config_data else 'not found'}")
-        
+
         # If not in cache, try fetching (handles cold start / first call)
         if not config_data:
             _log("Not in cache, fetching...")
-            _fetch_configs(timeout=_SYNC_TIMEOUT)  # Quick blocking fetch
+            _fetch_configs(timeout=_SYNC_TIMEOUT)
             config_data = _config_cache.get(config_key)
             _log(f"After fetch, cache lookup: {'found' if config_data else 'still not found'}")
-        
+
         if not config_data:
             _log(f"Config not found, using fallback: {fallback}")
             if fallback:
@@ -218,13 +335,10 @@ def get(
 
         # Get specific version or latest
         if version is not None:
-            # User wants a specific version
             config = config_data["versions"].get(version)
             if not config:
-                # Not in cache - try fetching it (short timeout)
                 config = _fetch_specific_version(config_key, version, timeout=_SYNC_TIMEOUT)
             if not config:
-                # Still not found - use fallback or error
                 if fallback:
                     print(f"[Fallom WARNING] Config '{config_key}' version {version} not found, using fallback: {fallback}")
                     return _return_with_trace(config_key, session_id, fallback, version=0)
@@ -233,7 +347,6 @@ def get(
                 )
             target_version = version
         else:
-            # Use latest (cached, zero latency)
             target_version = config_data["latest"]
             config = config_data["versions"].get(target_version)
             if not config:
@@ -246,30 +359,32 @@ def get(
 
         variants_raw = config["variants"]
         config_version = config.get("version", target_version)
-        
+
         # Handle both list and dict formats for variants
-        # List: [{"model": "x", "weight": 50}, ...]
-        # Dict: {"control": {"model": "x", "weight": 50}, ...}
         if isinstance(variants_raw, dict):
             variants = list(variants_raw.values())
         else:
             variants = variants_raw
-        
+
         _log(f"Config found! Version: {config_version}, Variants: {variants}")
 
-        # Deterministic assignment from session_id hash
-        # Same session_id always gets same model (sticky)
-        # Using 1M buckets for 0.01% granularity (good for apps with millions of users)
+        # 1. First, try targeting rules (if customer_id or context provided)
+        targeting = config.get("targeting")
+        targeted_variant_index = _evaluate_targeting(targeting, customer_id, context)
+        if targeted_variant_index is not None and targeted_variant_index < len(variants):
+            assigned_model = variants[targeted_variant_index]["model"]
+            _log(f"✅ Assigned model via targeting: {assigned_model}")
+            return _return_with_trace(config_key, session_id, assigned_model, config_version)
+
+        # 2. Fall back to deterministic assignment from session_id hash
         hash_bytes = hashlib.md5(session_id.encode()).digest()
         hash_val = int.from_bytes(hash_bytes[:4], byteorder='big') % 1_000_000
         _log(f"Session hash: {hash_val} (out of 1,000,000)")
 
         # Walk through variants by weight
-        # Weights are percentages (0-100) with decimal support (e.g., 0.01 for 0.01%)
         cumulative = 0.0
         assigned_model = variants[-1]["model"]  # Fallback to last
         for v in variants:
-            # Convert percentage to per-million (e.g., 50% -> 500000, 0.01% -> 100)
             old_cumulative = cumulative
             cumulative += float(v["weight"]) * 10000
             _log(f"Variant {v['model']}: weight={v['weight']}%, range={old_cumulative}-{cumulative}, hash={hash_val}, match={hash_val < cumulative}")
@@ -277,7 +392,7 @@ def get(
                 assigned_model = v["model"]
                 break
 
-        _log(f"✅ Assigned model: {assigned_model}")
+        _log(f"✅ Assigned model via weighted random: {assigned_model}")
         return _return_with_trace(config_key, session_id, assigned_model, config_version)
 
     except ValueError:
@@ -292,13 +407,6 @@ def get(
 
 def _return_with_trace(config_key: str, session_id: str, model: str, version: int) -> str:
     """Set trace context and record session, then return model."""
-    # Auto-set trace context so subsequent calls are tagged
-    try:
-        from fallom import trace
-        trace.set_session(config_key, session_id)
-    except Exception:
-        pass  # Tracing might not be initialized, that's ok
-
     # Record session async (non-blocking)
     if version > 0:  # Don't record fallback usage
         threading.Thread(
@@ -315,7 +423,7 @@ def _record_session(config_key: str, version: int, session_id: str, model: str):
     if not _api_key:
         return
     try:
-        resp = requests.post(
+        requests.post(
             f"{_base_url}/sessions",
             headers={"Authorization": f"Bearer {_api_key}"},
             json={
@@ -328,4 +436,3 @@ def _record_session(config_key: str, version: int, session_id: str, model: str):
         )
     except Exception:
         pass  # Fail silently - never impact user's app
-
