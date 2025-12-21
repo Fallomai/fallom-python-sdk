@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fallom"
-version = "0.2.1"
+version = "0.2.2"
 description = "Model A/B testing, prompt management, and tracing for LLM applications"
 readme = "README.md"
 license = {text = "MIT"}
