@@ -29,24 +29,6 @@ def create_openai_model(
     Returns:
         Model instance that can be used in compare_models()
 
-    Example:
-        # Fine-tuned model
-        fine_tuned = evals.create_openai_model(
-            "ft:gpt-4o-2024-08-06:my-org::abc123",
-            name="my-fine-tuned"
-        )
-
-        # Azure OpenAI
-        azure = evals.create_openai_model(
-            "gpt-4o",
-            base_url="https://my-resource.openai.azure.com/",
-            api_key="azure-api-key"
-        )
-
-        comparison = evals.compare_models(
-            dataset=dataset,
-            models=[fine_tuned, "openai/gpt-4o"]
-        )
     """
     def call_fn(messages: List[Dict[str, str]]) -> Dict[str, Any]:
         try:
@@ -111,30 +93,6 @@ def create_custom_model(
     Returns:
         A Model instance
 
-    Examples:
-        # Self-hosted vLLM
-        model = evals.create_custom_model(
-            name="my-llama-70b",
-            endpoint="http://localhost:8000/v1/chat/completions",
-            model_value="meta-llama/Llama-3.1-70B-Instruct"
-        )
-
-        # Ollama
-        model = evals.create_custom_model(
-            name="ollama-mistral",
-            endpoint="http://localhost:11434/v1/chat/completions",
-            model_value="mistral"
-        )
-
-        # Custom API with auth
-        model = evals.create_custom_model(
-            name="my-model",
-            endpoint="https://my-api.com/v1/chat/completions",
-            api_key="my-api-key",
-            headers={"X-Custom-Header": "value"}
-        )
-
-        comparison = evals.compare_models(dataset, models=[model, "openai/gpt-4o"])
     """
     def call_fn(messages: List[Dict[str, str]]) -> ModelResponse:
         request_headers = {"Content-Type": "application/json"}
@@ -187,19 +145,6 @@ def create_model_from_callable(
     Returns:
         A Model instance
 
-    Example:
-        def my_model_fn(messages):
-            # Call your model however you want
-            response = my_custom_api(messages)
-            return {
-                "content": response.text,
-                "tokens_in": response.input_tokens,
-                "tokens_out": response.output_tokens,
-                "cost": None
-            }
-
-        model = evals.create_model_from_callable("my-model", my_model_fn)
-        comparison = evals.compare_models(dataset, models=[model])
     """
     return Model(name=name, call_fn=call_fn)
 
@@ -220,21 +165,6 @@ def custom_metric(
     Returns:
         A CustomMetric instance
 
-    Example:
-        brand_metric = evals.custom_metric(
-            name="brand_alignment",
-            criteria="Brand Alignment - Does the response follow brand voice guidelines?",
-            steps=[
-                "Check if the tone is professional yet friendly",
-                "Verify no competitor brands are mentioned",
-                "Ensure the response uses approved terminology"
-            ]
-        )
-
-        results = evals.evaluate(
-            dataset=dataset,
-            metrics=["answer_relevancy", brand_metric]
-        )
     """
     return CustomMetric(name=name, criteria=criteria, steps=steps)
 
@@ -249,15 +179,6 @@ def dataset_from_traces(traces: List[Dict]) -> List[DatasetItem]:
     Returns:
         List of DatasetItem ready for evaluation
 
-    Example:
-        # Fetch traces from Fallom API
-        traces = requests.get(
-            "https://app.fallom.com/api/traces",
-            headers={"Authorization": f"Bearer {api_key}"},
-            params={"organization_id": org_id, "limit": 100}
-        ).json()["traces"]
-
-        dataset = evals.dataset_from_traces(traces)
     """
     items = []
 
@@ -364,4 +285,216 @@ def dataset_from_fallom(
     print(f"✓ Loaded dataset '{dataset_name}' (version {version_num}) with {len(items)} entries")
 
     return items
+
+
+class EvaluationDataset:
+    """
+    A dataset for evaluation that supports pulling from Fallom and adding test cases.
+    
+    This provides a workflow where you:
+    1. Pull a dataset (goldens) from Fallom
+    2. Run your own LLM pipeline on each golden to generate outputs
+    3. Add the results as test cases
+    4. Evaluate the test cases
+    
+    """
+    
+    def __init__(self):
+        from .types import Golden, LLMTestCase
+        self._goldens: List[Golden] = []
+        self._test_cases: List[LLMTestCase] = []
+        self._dataset_key: Optional[str] = None
+        self._dataset_name: Optional[str] = None
+        self._version: Optional[int] = None
+    
+    @property
+    def goldens(self) -> List["Golden"]:
+        """List of golden records (inputs with optional expected outputs)."""
+        from .types import Golden
+        return self._goldens
+    
+    @property
+    def test_cases(self) -> List["LLMTestCase"]:
+        """List of test cases (inputs with actual outputs from your LLM)."""
+        from .types import LLMTestCase
+        return self._test_cases
+    
+    @property
+    def dataset_key(self) -> Optional[str]:
+        """The Fallom dataset key if pulled from Fallom."""
+        return self._dataset_key
+    
+    def pull(
+        self, 
+        alias: str, 
+        version: Optional[int] = None
+    ) -> "EvaluationDataset":
+        """
+        Pull a dataset from Fallom.
+        
+        Args:
+            alias: The dataset key/alias in Fallom
+            version: Specific version to pull (default: latest)
+            
+        Returns:
+            Self for chaining
+            
+        """
+        from .types import Golden
+        from . import core
+        
+        if not core._initialized:
+            raise RuntimeError("Fallom evals not initialized. Call evals.init() first.")
+        
+        # Fetch from Fallom
+        url = f"{core._base_url}/api/datasets/{alias}"
+        params = {"include_entries": "true"}
+        if version is not None:
+            params["version"] = str(version)
+        
+        response = requests.get(
+            url,
+            headers={
+                "Authorization": f"Bearer {core._api_key}",
+                "Content-Type": "application/json"
+            },
+            params=params,
+            timeout=30
+        )
+        
+        if response.status_code == 404:
+            raise ValueError(f"Dataset '{alias}' not found")
+        elif response.status_code == 403:
+            raise ValueError(f"Access denied to dataset '{alias}'")
+        
+        response.raise_for_status()
+        data = response.json()
+        
+        # Store metadata
+        self._dataset_key = alias
+        self._dataset_name = data.get("dataset", {}).get("name", alias)
+        self._version = data.get("version", {}).get("version")
+        
+        # Convert entries to goldens
+        self._goldens = []
+        for entry in data.get("entries", []):
+            self._goldens.append(Golden(
+                input=entry.get("input", ""),
+                expected_output=entry.get("output"),
+                system_message=entry.get("systemMessage"),
+                metadata=entry.get("metadata")
+            ))
+        
+        print(f"✓ Pulled dataset '{self._dataset_name}' (version {self._version}) with {len(self._goldens)} goldens")
+        return self
+    
+    def add_golden(self, golden: "Golden") -> "EvaluationDataset":
+        """
+        Add a golden record manually.
+        
+        Args:
+            golden: A Golden instance
+            
+        Returns:
+            Self for chaining
+        """
+        self._goldens.append(golden)
+        return self
+    
+    def add_goldens(self, goldens: List["Golden"]) -> "EvaluationDataset":
+        """
+        Add multiple golden records.
+        
+        Args:
+            goldens: List of Golden instances
+            
+        Returns:
+            Self for chaining
+        """
+        self._goldens.extend(goldens)
+        return self
+    
+    def add_test_case(self, test_case: "LLMTestCase") -> "EvaluationDataset":
+        """
+        Add a test case with actual LLM output.
+        
+        Args:
+            test_case: An LLMTestCase instance
+            
+        Returns:
+            Self for chaining
+        """
+        self._test_cases.append(test_case)
+        return self
+    
+    def add_test_cases(self, test_cases: List["LLMTestCase"]) -> "EvaluationDataset":
+        """
+        Add multiple test cases.
+        
+        Args:
+            test_cases: List of LLMTestCase instances
+            
+        Returns:
+            Self for chaining
+        """
+        self._test_cases.extend(test_cases)
+        return self
+    
+    def generate_test_cases(
+        self,
+        llm_app: ModelCallable,
+        include_context: bool = False
+    ) -> "EvaluationDataset":
+        """
+        Automatically generate test cases by running all goldens through your LLM app.
+        
+        Args:
+            llm_app: A callable that takes messages and returns response dict
+            include_context: Whether to include context from the response metadata
+            
+        Returns:
+            Self for chaining
+
+        """
+        from .types import LLMTestCase
+        
+        print(f"Generating test cases for {len(self._goldens)} goldens...")
+        
+        for i, golden in enumerate(self._goldens):
+            # Build messages
+            messages = []
+            if golden.system_message:
+                messages.append({"role": "system", "content": golden.system_message})
+            messages.append({"role": "user", "content": golden.input})
+            
+            # Call the LLM app
+            response = llm_app(messages)
+            
+            # Create test case
+            test_case = LLMTestCase(
+                input=golden.input,
+                actual_output=response.get("content", ""),
+                expected_output=golden.expected_output,
+                system_message=golden.system_message,
+                context=response.get("context") if include_context else golden.context,
+                metadata=golden.metadata
+            )
+            self._test_cases.append(test_case)
+            
+            print(f"  [{i+1}/{len(self._goldens)}] Generated output for: {golden.input[:50]}...")
+        
+        print(f"✓ Generated {len(self._test_cases)} test cases")
+        return self
+    
+    def clear_test_cases(self) -> "EvaluationDataset":
+        """Clear all test cases (useful for re-running with different LLM)."""
+        self._test_cases = []
+        return self
+    
+    def __len__(self) -> int:
+        """Return the number of goldens."""
+        return len(self._goldens)
+    
+    def __repr__(self) -> str:
+        return f"EvaluationDataset(goldens={len(self._goldens)}, test_cases={len(self._test_cases)}, key={self._dataset_key})"
 

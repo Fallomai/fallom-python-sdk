@@ -7,17 +7,20 @@ import requests
 from typing import Optional, List, Dict, Any, Union
 
 from .types import (
-    MetricName,
     MetricInput,
     DatasetInput,
     DatasetItem,
     Model,
     EvalResult,
     CustomMetric,
+    LLMTestCase,
     AVAILABLE_METRICS,
 )
 from .prompts import METRIC_PROMPTS, build_g_eval_prompt
 from .helpers import dataset_from_fallom
+
+# Type alias for evaluate() input
+TestCaseInput = Union[List[LLMTestCase], List[DatasetItem], str]
 
 # Module state
 _api_key: Optional[str] = None
@@ -161,16 +164,17 @@ def _call_model_openrouter(
 
 
 def evaluate(
-    dataset: DatasetInput,
+    dataset: Optional[DatasetInput] = None,
     metrics: Optional[List[MetricInput]] = None,
     judge_model: Optional[str] = None,
     name: Optional[str] = None,
     description: Optional[str] = None,
     verbose: bool = True,
+    test_cases: Optional[List[LLMTestCase]] = None,
     _skip_upload: bool = False
 ) -> List[EvalResult]:
     """
-    Evaluate production outputs against specified metrics using G-Eval.
+    Evaluate outputs against specified metrics using G-Eval.
 
     Results are automatically uploaded to Fallom dashboard.
 
@@ -181,26 +185,28 @@ def evaluate(
         name: Name for this evaluation run (auto-generated if not provided)
         description: Optional description
         verbose: Print progress
+        test_cases: List of LLMTestCase (alternative to dataset - for custom LLM pipeline outputs)
 
     Returns:
         List of EvalResult with scores for each item
 
-    Example:
-        # With local dataset
-        results = evals.evaluate(
-            dataset=dataset,
-            metrics=["answer_relevancy", "faithfulness"],
-            name="Production Eval Dec 2024"
-        )
-
-        # With dataset from Fallom (just pass the key!)
-        results = evals.evaluate(
-            dataset="my-dataset-key",
-            metrics=["answer_relevancy", "faithfulness"]
-        )
     """
-    # Resolve dataset - fetch from Fallom if it's a string
-    resolved_dataset = _resolve_dataset(dataset)
+    # Handle test_cases input (convert to DatasetItem format)
+    if test_cases is not None:
+        resolved_dataset = [
+            DatasetItem(
+                input=tc.input,
+                output=tc.actual_output,
+                system_message=tc.system_message,
+                metadata=tc.metadata
+            )
+            for tc in test_cases
+        ]
+    elif dataset is not None:
+        # Resolve dataset - fetch from Fallom if it's a string
+        resolved_dataset = _resolve_dataset(dataset)
+    else:
+        raise ValueError("Either 'dataset' or 'test_cases' must be provided")
 
     # Use default judge model if not specified
     judge_model = judge_model or DEFAULT_JUDGE_MODEL
@@ -301,23 +307,6 @@ def compare_models(
     Returns:
         Dict mapping model name to list of EvalResults
 
-    Examples:
-        # Using a dataset from Fallom (just pass the key!)
-        comparison = evals.compare_models(
-            dataset="my-dataset-key",
-            models=["anthropic/claude-3-5-sonnet", "google/gemini-2.0-flash"],
-            metrics=["answer_relevancy", "faithfulness"]
-        )
-
-        # Including a fine-tuned model
-        fine_tuned = evals.create_openai_model(
-            "ft:gpt-4o-2024-08-06:my-org::abc123",
-            name="my-fine-tuned"
-        )
-        comparison = evals.compare_models(
-            dataset="my-dataset-key",
-            models=[fine_tuned, "openai/gpt-4o", "anthropic/claude-3-5-sonnet"]
-        )
     """
     # Resolve dataset - fetch from Fallom if it's a string
     resolved_dataset = _resolve_dataset(dataset)
