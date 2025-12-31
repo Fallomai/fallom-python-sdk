@@ -110,12 +110,21 @@ class EvalResult:
     model: str
     is_production: bool
 
+    # Expected/golden output for comparison (if provided)
+    expected_output: Optional[str] = None
+    # Retrieved documents/context for RAG evaluation
+    context: Optional[List[str]] = None
+    # Additional metadata
+    metadata: Optional[Dict[str, Any]] = None
+
     # Scores (0-1 scale)
     answer_relevancy: Optional[float] = None
     hallucination: Optional[float] = None
     toxicity: Optional[float] = None
     faithfulness: Optional[float] = None
     completeness: Optional[float] = None
+    coherence: Optional[float] = None
+    bias: Optional[float] = None
 
     # Reasoning from judge
     reasoning: Dict[str, str] = field(default_factory=dict)
