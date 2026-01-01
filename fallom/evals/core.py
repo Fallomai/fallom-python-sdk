@@ -191,17 +191,25 @@ def evaluate(
         List of EvalResult with scores for each item
 
     """
-    # Handle test_cases input (convert to DatasetItem format)
+    # Handle test_cases input (convert to DatasetItem format with extra fields)
+    # Store extra fields from test_cases that DatasetItem doesn't have
+    test_case_extras = {}
+    
     if test_cases is not None:
-        resolved_dataset = [
-            DatasetItem(
+        resolved_dataset = []
+        for idx, tc in enumerate(test_cases):
+            # Store extra fields for later use
+            if tc.expected_output or tc.context:
+                test_case_extras[idx] = {
+                    "expected_output": tc.expected_output,
+                    "context": tc.context,
+                }
+            resolved_dataset.append(DatasetItem(
                 input=tc.input,
                 output=tc.actual_output,
                 system_message=tc.system_message,
                 metadata=tc.metadata
-            )
-            for tc in test_cases
-        ]
+            ))
     elif dataset is not None:
         # Resolve dataset - fetch from Fallom if it's a string
         resolved_dataset = _resolve_dataset(dataset)
@@ -225,10 +233,16 @@ def evaluate(
         if verbose:
             print(f"Evaluating item {i+1}/{len(resolved_dataset)}...")
 
+        # Get extra fields from test_cases if available
+        extras = test_case_extras.get(i, {})
+
         result = EvalResult(
             input=item.input,
             output=item.output,
             system_message=item.system_message,
+            expected_output=extras.get("expected_output"),
+            context=extras.get("context"),
+            metadata=item.metadata,
             model="production",
             is_production=True,
             reasoning={}
@@ -372,6 +386,7 @@ def compare_models(
                     input=item.input,
                     output=output,
                     system_message=item.system_message,
+                    metadata=item.metadata,
                     model=model.name,
                     is_production=False,
                     reasoning={},
@@ -509,6 +524,9 @@ def _upload_results(
             {
                 "input": r.input,
                 "system_message": r.system_message,
+                "expected_output": r.expected_output,
+                "context": r.context,
+                "metadata": r.metadata,
                 "model": r.model,
                 "output": r.output,
                 "is_production": r.is_production,
@@ -517,6 +535,8 @@ def _upload_results(
                 "toxicity": r.toxicity,
                 "faithfulness": r.faithfulness,
                 "completeness": r.completeness,
+                "coherence": getattr(r, "coherence", None),
+                "bias": getattr(r, "bias", None),
                 "reasoning": r.reasoning,
                 "latency_ms": r.latency_ms,
                 "tokens_in": r.tokens_in,
