@@ -48,8 +48,9 @@ dev = [
 
 [project.urls]
 Homepage = "https://fallom.com"
-Documentation = "https://bench.fallom.com"
-Repository = "https://github.com/fallom/fallom-python"
+Documentation = "https://docs.fallom.com"
+App = "https://app.fallom.com"
+Repository = "https://github.com/Fallomai/fallom-python-sdk"
 
 [tool.setuptools.packages.find]
 where = ["."]
