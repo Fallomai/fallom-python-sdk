@@ -66,6 +66,8 @@ from .wrappers import (
     wrap_openai,
     wrap_anthropic,
     wrap_google_ai,
+    FallomCallbackHandler,
+    callback_handler_from_session,
 )
 
 # Legacy support: set_session, get_session, clear_session, span
@@ -217,6 +219,9 @@ __all__ = [
     "wrap_openai",
     "wrap_anthropic",
     "wrap_google_ai",
+    # LangChain integration
+    "FallomCallbackHandler",
+    "callback_handler_from_session",
     # Legacy API
     "set_session",
     "get_session",

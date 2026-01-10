@@ -1,7 +1,10 @@
 """
 FallomSession - Session-scoped tracing for concurrent-safe operations.
 """
-from typing import Optional, Dict, Any, List, TypeVar
+from typing import Optional, Dict, Any, List, TypeVar, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .wrappers.langchain import FallomCallbackHandler
 
 from .types import SessionContext, SessionOptions
 from .wrappers.openai import wrap_openai
@@ -131,6 +134,38 @@ class FallomSession:
             The wrapped model with tracing enabled
         """
         return wrap_google_ai(model, self._ctx)
+
+    def langchain_callback(self) -> "FallomCallbackHandler":
+        """
+        Create a LangChain callback handler for this session.
+
+        Use this with any LangChain component to automatically trace
+        LLM calls, chains, tools, and agents.
+
+        Returns:
+            A FallomCallbackHandler instance with this session's context
+
+        Example:
+            session = fallom.session(config_key="my-app", session_id="123")
+            handler = session.langchain_callback()
+
+            # Use with ChatOpenAI
+            from langchain_openai import ChatOpenAI
+            llm = ChatOpenAI(model="gpt-4o", callbacks=[handler])
+
+            # Or pass to invoke calls
+            chain.invoke({"input": "Hello"}, config={"callbacks": [handler]})
+        """
+        # Lazy import - will raise ImportError with helpful message if langchain not installed
+        from .wrappers.langchain import FallomCallbackHandler
+
+        return FallomCallbackHandler(
+            config_key=self._ctx.config_key,
+            session_id=self._ctx.session_id,
+            customer_id=self._ctx.customer_id,
+            metadata=self._ctx.metadata,
+            tags=self._ctx.tags,
+        )
 
 
 def session(

@@ -35,11 +35,11 @@ dependencies = [
 [project.optional-dependencies]
 openai = ["opentelemetry-instrumentation-openai>=0.1.0"]
 anthropic = ["opentelemetry-instrumentation-anthropic>=0.1.0"]
-langchain = ["opentelemetry-instrumentation-langchain>=0.1.0"]
+langchain = ["langchain-core>=0.1.0"]
 all = [
     "opentelemetry-instrumentation-openai>=0.1.0",
     "opentelemetry-instrumentation-anthropic>=0.1.0",
-    "opentelemetry-instrumentation-langchain>=0.1.0",
+    "langchain-core>=0.1.0",
 ]
 dev = [
     "pytest>=7.0.0",
