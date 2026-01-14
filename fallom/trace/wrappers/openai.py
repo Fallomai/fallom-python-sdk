@@ -9,7 +9,6 @@ Supports:
 - Responses API (client.responses.create)
 - Both sync (OpenAI) and async (AsyncOpenAI) clients
 """
-import asyncio
 import json
 import time
 from typing import Any, TypeVar
@@ -247,8 +246,9 @@ def wrap_openai(client: T, session_ctx: SessionContext) -> T:
     """
     ctx = session_ctx
     
-    # Check if this is an async client
-    is_async = asyncio.iscoroutinefunction(getattr(client.chat.completions, "create", None))
+    # Check if this is an async client by class name
+    # OpenAI SDK uses AsyncOpenAI for async and OpenAI for sync
+    is_async = "Async" in type(client).__name__
     
     # Wrap chat.completions.create
     _wrap_chat_completions(client, ctx, is_async)

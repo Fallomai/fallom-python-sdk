@@ -56,7 +56,7 @@ from fallom import evals
 # Re-export session from trace for convenience
 from fallom.trace import session, FallomSession
 
-__version__ = "0.2.5"
+__version__ = "0.2.6"
 
 
 def init(
