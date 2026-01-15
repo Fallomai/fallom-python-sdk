@@ -19,9 +19,16 @@ Usage:
     openai = session.wrap_openai(OpenAI())
 
     # All LLM calls are now automatically traced!
+    # Supports Chat Completions API:
     response = openai.chat.completions.create(
         model="gpt-4o",
         messages=[{"role": "user", "content": "Hello!"}]
+    )
+
+    # And Responses API:
+    response = openai.responses.create(
+        model="gpt-4o",
+        input="Hello!"
     )
 
     # Model A/B testing
@@ -49,7 +56,7 @@ from fallom import evals
 # Re-export session from trace for convenience
 from fallom.trace import session, FallomSession
 
-__version__ = "0.2.0"
+__version__ = "0.2.6"
 
 
 def init(
