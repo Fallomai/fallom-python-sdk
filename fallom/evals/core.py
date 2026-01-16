@@ -65,7 +65,8 @@ def _run_g_eval(
     input_text: str,
     output_text: str,
     system_message: Optional[str],
-    judge_model: str
+    judge_model: str,
+    judge_context: Optional[str] = None
 ) -> tuple:
     """
     Run G-Eval for a single metric using OpenRouter.
@@ -93,7 +94,7 @@ def _run_g_eval(
         criteria = metric_config["criteria"]
         steps = metric_config["steps"]
 
-    prompt = build_g_eval_prompt(criteria, steps, system_message, input_text, output_text)
+    prompt = build_g_eval_prompt(criteria, steps, system_message, input_text, output_text, judge_context)
 
     response = requests.post(
         "https://openrouter.ai/api/v1/chat/completions",
@@ -167,6 +168,7 @@ def evaluate(
     dataset: Optional[DatasetInput] = None,
     metrics: Optional[List[MetricInput]] = None,
     judge_model: Optional[str] = None,
+    judge_context: Optional[str] = None,
     name: Optional[str] = None,
     description: Optional[str] = None,
     verbose: bool = True,
@@ -182,6 +184,9 @@ def evaluate(
         dataset: Either a list of DatasetItem OR a string (dataset key to fetch from Fallom)
         metrics: List of metrics to run (built-in or custom). Default: all built-in metrics
         judge_model: Model to use as judge via OpenRouter (default: openai/gpt-4o-mini)
+        judge_context: Context to provide the LLM judge about the product/domain being evaluated.
+            This helps the judge make better evaluations by understanding what features
+            or capabilities are valid (e.g., won't mark valid features as hallucinations).
         name: Name for this evaluation run (auto-generated if not provided)
         description: Optional description
         verbose: Print progress
@@ -262,7 +267,8 @@ def evaluate(
                     input_text=item.input,
                     output_text=item.output,
                     system_message=item.system_message,
-                    judge_model=judge_model
+                    judge_model=judge_model,
+                    judge_context=judge_context
                 )
 
                 setattr(result, metric_name, score)
@@ -294,6 +300,7 @@ def compare_models(
     models: List[Union[str, Model]],
     metrics: Optional[List[MetricInput]] = None,
     judge_model: Optional[str] = None,
+    judge_context: Optional[str] = None,
     include_production: bool = True,
     model_kwargs: Optional[Dict[str, Any]] = None,
     name: Optional[str] = None,
@@ -312,6 +319,9 @@ def compare_models(
             - A Model instance (for custom/fine-tuned models)
         metrics: List of metrics to run (built-in or custom)
         judge_model: Model to use as judge via OpenRouter (default: openai/gpt-4o-mini)
+        judge_context: Context to provide the LLM judge about the product/domain being evaluated.
+            This helps the judge make better evaluations by understanding what features
+            or capabilities are valid (e.g., won't mark valid features as hallucinations).
         include_production: Include production outputs in comparison
         model_kwargs: Additional kwargs for OpenRouter model calls (temperature, max_tokens, etc.)
         name: Name for this evaluation run (auto-generated if not provided)
@@ -342,6 +352,7 @@ def compare_models(
             dataset=resolved_dataset,
             metrics=metrics,
             judge_model=judge_model,
+            judge_context=judge_context,
             verbose=verbose,
             _skip_upload=True
         )
@@ -408,7 +419,8 @@ def compare_models(
                             input_text=item.input,
                             output_text=output,
                             system_message=item.system_message,
-                            judge_model=judge_model
+                            judge_model=judge_model,
+                            judge_context=judge_context
                         )
 
                         setattr(result, metric_name, score)

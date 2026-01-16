@@ -57,13 +57,25 @@ def build_g_eval_prompt(
     steps: List[str],
     system_message: str | None,
     input_text: str,
-    output_text: str
+    output_text: str,
+    judge_context: str | None = None
 ) -> str:
     """Build the G-Eval prompt for the LLM judge."""
     steps_text = "\n".join(f"{i+1}. {step}" for i, step in enumerate(steps))
 
-    return f"""You are an expert evaluator assessing LLM outputs.
+    # Build context section if provided
+    context_section = ""
+    if judge_context:
+        context_section = f"""
+## Important Context
+The following context provides important information about the product/domain being evaluated. Use this to understand what features and capabilities are valid:
 
+{judge_context}
+
+"""
+
+    return f"""You are an expert evaluator assessing LLM outputs.
+{context_section}
 ## Evaluation Criteria
 {criteria}
 
